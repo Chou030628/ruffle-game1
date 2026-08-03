@@ -3,10 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>游戏字体测试</title>
+
+    <title>盟军战争英雄：1944 进阶版</title>
 
     <style>
-        html, body {
+        html,
+        body {
             width: 100%;
             height: 100%;
             margin: 0;
@@ -28,7 +30,24 @@
         }
     </style>
 
+    <!-- 本地自托管的 Ruffle -->
     <script src="./ruffle/ruffle.js"></script>
+
+    <!-- 百度统计 -->
+    <script>
+        var _hmt = _hmt || [];
+
+        (function () {
+            var hm = document.createElement("script");
+
+            hm.src =
+                "https://hm.baidu.com/hm.js?b1e1c2a42e540fa7a8962cca3ec8e1ad";
+
+            var s = document.getElementsByTagName("script")[0];
+
+            s.parentNode.insertBefore(hm, s);
+        })();
+    </script>
 </head>
 
 <body>
@@ -60,10 +79,12 @@
                         "Noto Sans CJK SC",
                         "Arial"
                     ],
+
                     serif: [
                         "SimSun",
                         "Microsoft YaHei"
                     ],
+
                     typewriter: [
                         "Microsoft YaHei",
                         "SimSun"
