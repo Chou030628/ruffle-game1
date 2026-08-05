@@ -71,50 +71,55 @@
             const container =
                 document.getElementById("game-container");
 
-            /*
-             * 完整下载并检查 SWF。
-             * 如果 GitHub Pages 偶尔返回异常的分段内容，
-             * 会自动换一个地址参数重新请求。
-             */
-            async function downloadSwf(maxAttempts = 3) {
+            async function downloadSwf(maxAttempts = 5) {
                 let lastError = null;
+
+                /*
+                * 使用固定版本地址。
+                * 只有真正更换 SWF 文件时，才修改版本号。
+                */
+                const swfUrl = new URL(
+                    "./game_v2.swf",
+                    window.location.href
+                );
+
+                swfUrl.searchParams.set(
+                    "v",
+                    "20260805-3"
+                );
 
                 for (
                     let attempt = 1;
                     attempt <= maxAttempts;
                     attempt++
                 ) {
+                    const loadingMessage =
+                        document.getElementById(
+                            "loading-message"
+                        );
+
+                    if (loadingMessage) {
+                        loadingMessage.innerHTML =
+                            "游戏正在加载，请稍候……<br>" +
+                            "正在下载游戏文件：" +
+                            attempt +
+                            " / " +
+                            maxAttempts;
+                    }
+
                     try {
-                        const swfUrl = new URL(
-                            "./game_v2.swf",
-                            window.location.href
-                        );
-
                         /*
-                         * 修改游戏文件后，可以更改这里的版本号，
-                         * 用于绕过旧缓存。
-                         */
-                        swfUrl.searchParams.set(
-                            "v",
-                            "20260805-2"
-                        );
-
-                        /*
-                         * 第一次失败后，后续请求使用独立参数，
-                         * 防止再次命中同一个异常缓存。
-                         */
-                        if (attempt > 1) {
-                            swfUrl.searchParams.set(
-                                "retry",
-                                Date.now() + "-" + attempt
-                            );
-                        }
-
+                        * 第一次优先使用浏览器中的完整缓存。
+                        * 失败后重新从服务器下载，并更新缓存。
+                        */
                         const response = await fetch(
                             swfUrl,
                             {
                                 method: "GET",
-                                cache: "no-store"
+                                cache:
+                                    attempt === 1
+                                        ? "force-cache"
+                                        : "reload"
                             }
                         );
 
@@ -130,37 +135,47 @@
 
                         if (data.byteLength < 8) {
                             throw new Error(
-                                "下载到的文件过短，仅有 " +
+                                "文件过短，仅有 " +
                                 data.byteLength +
                                 " 字节"
                             );
                         }
 
                         /*
-                         * 检查是否收到了不完整的 Range 响应。
-                         */
+                        * 检查服务器是否只返回了部分文件。
+                        */
                         const contentRange =
                             response.headers.get(
                                 "content-range"
                             );
 
                         if (contentRange) {
-                            const match = contentRange.match(
-                                /bytes\s+(\d+)-(\d+)\/(\d+)/i
-                            );
+                            const match =
+                                contentRange.match(
+                                    /bytes\s+(\d+)-(\d+)\/(\d+)/i
+                                );
 
                             if (match) {
                                 const start =
                                     Number(match[1]);
+
+                                const end =
+                                    Number(match[2]);
+
                                 const total =
                                     Number(match[3]);
 
+                                const rangeLength =
+                                    end - start + 1;
+
                                 if (
                                     start !== 0 ||
-                                    data.byteLength !== total
+                                    rangeLength !==
+                                        data.byteLength ||
+                                    end + 1 !== total
                                 ) {
                                     throw new Error(
-                                        "服务器返回了不完整的分段文件：" +
+                                        "服务器返回了不完整文件：" +
                                         contentRange
                                     );
                                 }
@@ -168,9 +183,8 @@
                         }
 
                         /*
-                         * 合法 SWF 的前三个字符应当是：
-                         * FWS、CWS 或 ZWS。
-                         */
+                        * 检查 SWF 文件头。
+                        */
                         const bytes =
                             new Uint8Array(data, 0, 3);
 
@@ -194,27 +208,39 @@
 
                         return data;
                     } catch (error) {
-                        console.error(
+                        lastError = error;
+
+                        console.warn(
                             "第 " +
                             attempt +
                             " 次下载失败：",
                             error
                         );
 
-                        lastError = error;
-
+                        /*
+                        * 每次失败后稍等一会儿再重试。
+                        */
                         if (attempt < maxAttempts) {
+                            const waitTime =
+                                Math.min(
+                                    attempt * 1500,
+                                    5000
+                                );
+
                             await new Promise(function (
                                 resolve
                             ) {
-                                setTimeout(resolve, 1000);
+                                setTimeout(
+                                    resolve,
+                                    waitTime
+                                );
                             });
                         }
                     }
                 }
 
                 throw lastError ||
-                    new Error("SWF 下载失败");
+                    new Error("游戏文件下载失败");
             }
 
             try {
@@ -281,10 +307,28 @@
 
                 container.innerHTML =
                     '<div id="error-message">' +
-                    "游戏文件加载失败，请刷新页面重试。" +
+                    "游戏文件加载失败。" +
                     "<br><br>" +
                     String(error.message || error) +
+                    "<br><br>" +
+                    '<button id="retry-button" ' +
+                    'style="' +
+                    "font-size:18px;" +
+                    "padding:10px 24px;" +
+                    "cursor:pointer;" +
+                    '">' +
+                    "重新加载" +
+                    "</button>" +
                     "</div>";
+
+                document
+                    .getElementById("retry-button")
+                    .addEventListener(
+                        "click",
+                        function () {
+                            window.location.reload();
+                        }
+                    );
             }
         });
     </script>
