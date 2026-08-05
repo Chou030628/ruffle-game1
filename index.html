@@ -79,8 +79,7 @@
                 * 只有真正更换 SWF 文件时，才修改版本号。
                 */
                 const swfUrl = new URL(
-                    "./game_v2.swf",
-                    window.location.href
+                    "https://raw.githubusercontent.com/Chou030628/ruffle-game1/main/game_v2.swf"
                 );
 
                 swfUrl.searchParams.set(
@@ -116,6 +115,7 @@
                             swfUrl,
                             {
                                 method: "GET",
+                                mode: "cors",
                                 cache:
                                     attempt === 1
                                         ? "force-cache"
