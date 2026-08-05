@@ -47,6 +47,12 @@
             font-size: 18px;
         }
 
+        #retry-button {
+            font-size: 18px;
+            padding: 10px 24px;
+            cursor: pointer;
+        }
+
         ruffle-player {
             display: block;
             width: 100%;
@@ -71,183 +77,617 @@
             const container =
                 document.getElementById("game-container");
 
-            async function downloadSwf(maxAttempts = 5) {
-                let lastError = null;
+            /*
+             * 更新 game_v2.swf 后，请同时修改：
+             * 1. SWF_CACHE_KEY
+             * 2. sourceUrl 后面的版本参数
+             * 3. totalSize（如果文件大小发生变化）
+             */
+            const SWF_CACHE_KEY =
+                "game_v2-20260805-2";
 
-                /*
-                * 使用固定版本地址。
-                * 只有真正更换 SWF 文件时，才修改版本号。
-                */
-                const swfUrl = new URL(
-                    "https://raw.githubusercontent.com/Chou030628/ruffle-game1/main/game_v2.swf"
-                );
+            const SWF_DATABASE_NAME =
+                "war-heroes-cache";
 
-                swfUrl.searchParams.set(
-                    "v",
-                    "20260805-3"
-                );
+            const SWF_STORE_NAME =
+                "game-files";
 
-                for (
-                    let attempt = 1;
-                    attempt <= maxAttempts;
-                    attempt++
-                ) {
-                    const loadingMessage =
-                        document.getElementById(
-                            "loading-message"
-                        );
+            const SWF_DATABASE_VERSION = 1;
 
-                    if (loadingMessage) {
-                        loadingMessage.innerHTML =
-                            "游戏正在加载，请稍候……<br>" +
-                            "正在下载游戏文件：" +
-                            attempt +
-                            " / " +
-                            maxAttempts;
-                    }
+            const SWF_TOTAL_SIZE = 38167134;
 
-                    try {
-                        /*
-                        * 第一次优先使用浏览器中的完整缓存。
-                        * 失败后重新从服务器下载，并更新缓存。
-                        */
-                        const response = await fetch(
-                            swfUrl,
-                            {
-                                method: "GET",
-                                mode: "cors",
-                                cache:
-                                    attempt === 1
-                                        ? "force-cache"
-                                        : "reload"
-                            }
-                        );
+            function updateLoadingMessage(message) {
+                const loadingMessage =
+                    document.getElementById(
+                        "loading-message"
+                    );
 
-                        if (!response.ok) {
-                            throw new Error(
-                                "HTTP 状态码：" +
-                                response.status
-                            );
-                        }
+                if (loadingMessage) {
+                    loadingMessage.innerHTML = message;
+                }
+            }
 
-                        const data =
-                            await response.arrayBuffer();
+            function validateSwfData(data) {
+                let bytes;
 
-                        if (data.byteLength < 8) {
-                            throw new Error(
-                                "文件过短，仅有 " +
-                                data.byteLength +
-                                " 字节"
-                            );
-                        }
-
-                        /*
-                        * 检查服务器是否只返回了部分文件。
-                        */
-                        const contentRange =
-                            response.headers.get(
-                                "content-range"
-                            );
-
-                        if (contentRange) {
-                            const match =
-                                contentRange.match(
-                                    /bytes\s+(\d+)-(\d+)\/(\d+)/i
-                                );
-
-                            if (match) {
-                                const start =
-                                    Number(match[1]);
-
-                                const end =
-                                    Number(match[2]);
-
-                                const total =
-                                    Number(match[3]);
-
-                                const rangeLength =
-                                    end - start + 1;
-
-                                if (
-                                    start !== 0 ||
-                                    rangeLength !==
-                                        data.byteLength ||
-                                    end + 1 !== total
-                                ) {
-                                    throw new Error(
-                                        "服务器返回了不完整文件：" +
-                                        contentRange
-                                    );
-                                }
-                            }
-                        }
-
-                        /*
-                        * 检查 SWF 文件头。
-                        */
-                        const bytes =
-                            new Uint8Array(data, 0, 3);
-
-                        const signature =
-                            String.fromCharCode(
-                                bytes[0],
-                                bytes[1],
-                                bytes[2]
-                            );
-
-                        if (
-                            signature !== "FWS" &&
-                            signature !== "CWS" &&
-                            signature !== "ZWS"
-                        ) {
-                            throw new Error(
-                                "文件头不是合法 SWF：" +
-                                JSON.stringify(signature)
-                            );
-                        }
-
-                        return data;
-                    } catch (error) {
-                        lastError = error;
-
-                        console.warn(
-                            "第 " +
-                            attempt +
-                            " 次下载失败：",
-                            error
-                        );
-
-                        /*
-                        * 每次失败后稍等一会儿再重试。
-                        */
-                        if (attempt < maxAttempts) {
-                            const waitTime =
-                                Math.min(
-                                    attempt * 1500,
-                                    5000
-                                );
-
-                            await new Promise(function (
-                                resolve
-                            ) {
-                                setTimeout(
-                                    resolve,
-                                    waitTime
-                                );
-                            });
-                        }
-                    }
+                if (data instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(data);
+                } else if (ArrayBuffer.isView(data)) {
+                    bytes = new Uint8Array(
+                        data.buffer,
+                        data.byteOffset,
+                        data.byteLength
+                    );
+                } else {
+                    throw new Error(
+                        "缓存中的游戏文件格式无效"
+                    );
                 }
 
-                throw lastError ||
-                    new Error("游戏文件下载失败");
+                if (
+                    bytes.byteLength !==
+                    SWF_TOTAL_SIZE
+                ) {
+                    throw new Error(
+                        "游戏文件大小不正确，应为 " +
+                        SWF_TOTAL_SIZE +
+                        " 字节，实际为 " +
+                        bytes.byteLength +
+                        " 字节"
+                    );
+                }
+
+                const signature =
+                    String.fromCharCode(
+                        bytes[0],
+                        bytes[1],
+                        bytes[2]
+                    );
+
+                if (
+                    signature !== "FWS" &&
+                    signature !== "CWS" &&
+                    signature !== "ZWS"
+                ) {
+                    throw new Error(
+                        "游戏文件头不是合法 SWF：" +
+                        JSON.stringify(signature)
+                    );
+                }
+
+                return bytes.buffer.slice(
+                    bytes.byteOffset,
+                    bytes.byteOffset +
+                    bytes.byteLength
+                );
+            }
+
+            function openGameDatabase() {
+                return new Promise(function (
+                    resolve,
+                    reject
+                ) {
+                    const request = indexedDB.open(
+                        SWF_DATABASE_NAME,
+                        SWF_DATABASE_VERSION
+                    );
+
+                    request.onupgradeneeded =
+                        function () {
+                            const database =
+                                request.result;
+
+                            if (
+                                !database
+                                    .objectStoreNames
+                                    .contains(
+                                        SWF_STORE_NAME
+                                    )
+                            ) {
+                                database
+                                    .createObjectStore(
+                                        SWF_STORE_NAME
+                                    );
+                            }
+                        };
+
+                    request.onsuccess =
+                        function () {
+                            resolve(request.result);
+                        };
+
+                    request.onerror =
+                        function () {
+                            reject(
+                                request.error ||
+                                new Error(
+                                    "无法打开浏览器本地缓存"
+                                )
+                            );
+                        };
+
+                    request.onblocked =
+                        function () {
+                            reject(
+                                new Error(
+                                    "浏览器本地缓存被其他页面占用"
+                                )
+                            );
+                        };
+                });
+            }
+
+            async function readCachedSwf() {
+                const database =
+                    await openGameDatabase();
+
+                return new Promise(function (
+                    resolve,
+                    reject
+                ) {
+                    const transaction =
+                        database.transaction(
+                            SWF_STORE_NAME,
+                            "readonly"
+                        );
+
+                    const store =
+                        transaction.objectStore(
+                            SWF_STORE_NAME
+                        );
+
+                    const request =
+                        store.get(
+                            SWF_CACHE_KEY
+                        );
+
+                    request.onsuccess =
+                        function () {
+                            resolve(
+                                request.result ||
+                                null
+                            );
+                        };
+
+                    request.onerror =
+                        function () {
+                            reject(
+                                request.error ||
+                                new Error(
+                                    "读取本地游戏文件失败"
+                                )
+                            );
+                        };
+
+                    transaction.oncomplete =
+                        function () {
+                            database.close();
+                        };
+
+                    transaction.onerror =
+                        function () {
+                            database.close();
+                        };
+
+                    transaction.onabort =
+                        function () {
+                            database.close();
+                        };
+                });
+            }
+
+            async function saveCachedSwf(
+                arrayBuffer
+            ) {
+                const validBuffer =
+                    validateSwfData(
+                        arrayBuffer
+                    );
+
+                const database =
+                    await openGameDatabase();
+
+                return new Promise(function (
+                    resolve,
+                    reject
+                ) {
+                    const transaction =
+                        database.transaction(
+                            SWF_STORE_NAME,
+                            "readwrite"
+                        );
+
+                    const store =
+                        transaction.objectStore(
+                            SWF_STORE_NAME
+                        );
+
+                    /*
+                     * 清除旧版缓存，只保留当前版本，
+                     * 防止以后更新多次后占用太多空间。
+                     */
+                    store.clear();
+                    store.put(
+                        validBuffer,
+                        SWF_CACHE_KEY
+                    );
+
+                    transaction.oncomplete =
+                        function () {
+                            database.close();
+                            resolve();
+                        };
+
+                    transaction.onerror =
+                        function () {
+                            const error =
+                                transaction.error ||
+                                new Error(
+                                    "保存本地游戏文件失败"
+                                );
+
+                            database.close();
+                            reject(error);
+                        };
+
+                    transaction.onabort =
+                        function () {
+                            const error =
+                                transaction.error ||
+                                new Error(
+                                    "保存本地游戏文件被中止"
+                                );
+
+                            database.close();
+                            reject(error);
+                        };
+                });
+            }
+
+            async function deleteCachedSwf() {
+                const database =
+                    await openGameDatabase();
+
+                return new Promise(function (
+                    resolve,
+                    reject
+                ) {
+                    const transaction =
+                        database.transaction(
+                            SWF_STORE_NAME,
+                            "readwrite"
+                        );
+
+                    const store =
+                        transaction.objectStore(
+                            SWF_STORE_NAME
+                        );
+
+                    store.delete(
+                        SWF_CACHE_KEY
+                    );
+
+                    transaction.oncomplete =
+                        function () {
+                            database.close();
+                            resolve();
+                        };
+
+                    transaction.onerror =
+                        function () {
+                            const error =
+                                transaction.error ||
+                                new Error(
+                                    "删除损坏缓存失败"
+                                );
+
+                            database.close();
+                            reject(error);
+                        };
+                });
+            }
+
+            async function downloadSwf() {
+                const sourceUrl =
+                    "https://raw.githubusercontent.com/" +
+                    "Chou030628/ruffle-game1/" +
+                    "main/game_v2.swf" +
+                    "?v=20260805-2";
+
+                /*
+                 * 每块 2 MB。
+                 * 某一块失败时，只重试这一小块。
+                 */
+                const chunkSize =
+                    2 * 1024 * 1024;
+
+                const maxChunkAttempts = 5;
+
+                const result =
+                    new Uint8Array(
+                        SWF_TOTAL_SIZE
+                    );
+
+                async function sleep(
+                    milliseconds
+                ) {
+                    return new Promise(function (
+                        resolve
+                    ) {
+                        setTimeout(
+                            resolve,
+                            milliseconds
+                        );
+                    });
+                }
+
+                async function downloadChunk(
+                    start,
+                    end
+                ) {
+                    const expectedLength =
+                        end - start + 1;
+
+                    let lastError = null;
+
+                    for (
+                        let attempt = 1;
+                        attempt <=
+                            maxChunkAttempts;
+                        attempt++
+                    ) {
+                        const controller =
+                            new AbortController();
+
+                        const timeoutId =
+                            setTimeout(
+                                function () {
+                                    controller.abort();
+                                },
+                                60000
+                            );
+
+                        try {
+                            const response =
+                                await fetch(
+                                    sourceUrl,
+                                    {
+                                        method: "GET",
+                                        mode: "cors",
+                                        cache: "no-store",
+
+                                        headers: {
+                                            Range:
+                                                "bytes=" +
+                                                start +
+                                                "-" +
+                                                end
+                                        },
+
+                                        signal:
+                                            controller
+                                                .signal
+                                    }
+                                );
+
+                            clearTimeout(
+                                timeoutId
+                            );
+
+                            if (
+                                response.status !==
+                                206
+                            ) {
+                                throw new Error(
+                                    "分块请求状态码异常：" +
+                                    response.status
+                                );
+                            }
+
+                            const buffer =
+                                await response
+                                    .arrayBuffer();
+
+                            if (
+                                buffer.byteLength !==
+                                expectedLength
+                            ) {
+                                throw new Error(
+                                    "分块大小错误，应为 " +
+                                    expectedLength +
+                                    " 字节，实际为 " +
+                                    buffer.byteLength +
+                                    " 字节"
+                                );
+                            }
+
+                            return new Uint8Array(
+                                buffer
+                            );
+                        } catch (error) {
+                            clearTimeout(
+                                timeoutId
+                            );
+
+                            lastError = error;
+
+                            console.warn(
+                                "分块 " +
+                                start +
+                                "-" +
+                                end +
+                                " 第 " +
+                                attempt +
+                                " 次失败：",
+                                error
+                            );
+
+                            if (
+                                attempt <
+                                maxChunkAttempts
+                            ) {
+                                await sleep(
+                                    attempt * 1000
+                                );
+                            }
+                        }
+                    }
+
+                    throw (
+                        lastError ||
+                        new Error(
+                            "分块下载失败：" +
+                            start +
+                            "-" +
+                            end
+                        )
+                    );
+                }
+
+                let downloadedSize = 0;
+
+                for (
+                    let start = 0;
+                    start < SWF_TOTAL_SIZE;
+                    start += chunkSize
+                ) {
+                    const end = Math.min(
+                        start +
+                            chunkSize -
+                            1,
+                        SWF_TOTAL_SIZE - 1
+                    );
+
+                    const chunk =
+                        await downloadChunk(
+                            start,
+                            end
+                        );
+
+                    result.set(
+                        chunk,
+                        start
+                    );
+
+                    downloadedSize +=
+                        chunk.byteLength;
+
+                    const percent =
+                        Math.floor(
+                            downloadedSize /
+                            SWF_TOTAL_SIZE *
+                            100
+                        );
+
+                    updateLoadingMessage(
+                        "游戏正在加载，请稍候……<br>" +
+                        "游戏文件已下载：" +
+                        percent +
+                        "%"
+                    );
+                }
+
+                const validBuffer =
+                    validateSwfData(
+                        result
+                    );
+
+                console.log(
+                    "SWF 分块下载完成，大小：",
+                    (
+                        result.byteLength /
+                        1024 /
+                        1024
+                    ).toFixed(2),
+                    "MB"
+                );
+
+                return validBuffer;
             }
 
             try {
-                const swfData = await downloadSwf();
+                let swfData = null;
+
+                /*
+                 * 先读取 IndexedDB 中的完整 SWF。
+                 */
+                try {
+                    updateLoadingMessage(
+                        "正在检查浏览器中的本地游戏文件……"
+                    );
+
+                    const cachedData =
+                        await readCachedSwf();
+
+                    if (cachedData) {
+                        swfData =
+                            validateSwfData(
+                                cachedData
+                            );
+
+                        console.log(
+                            "已从浏览器本地缓存读取 SWF"
+                        );
+
+                        updateLoadingMessage(
+                            "已找到本地游戏文件，正在启动……"
+                        );
+                    }
+                } catch (cacheError) {
+                    console.warn(
+                        "读取到的本地缓存无效，将重新下载：",
+                        cacheError
+                    );
+
+                    try {
+                        await deleteCachedSwf();
+                    } catch (
+                        deleteError
+                    ) {
+                        console.warn(
+                            "删除无效缓存失败：",
+                            deleteError
+                        );
+                    }
+
+                    swfData = null;
+                }
+
+                /*
+                 * 本地没有缓存时，才进行分块下载。
+                 */
+                if (!swfData) {
+                    swfData =
+                        await downloadSwf();
+
+                    updateLoadingMessage(
+                        "游戏文件下载完成，正在保存到浏览器……"
+                    );
+
+                    try {
+                        await saveCachedSwf(
+                            swfData
+                        );
+
+                        console.log(
+                            "SWF 已保存到浏览器本地缓存"
+                        );
+                    } catch (
+                        cacheError
+                    ) {
+                        /*
+                         * 缓存保存失败不影响本次游玩。
+                         */
+                        console.warn(
+                            "保存本地缓存失败，下次仍需重新下载：",
+                            cacheError
+                        );
+                    }
+                }
 
                 const ruffle =
-                    window.RufflePlayer.newest();
+                    window.RufflePlayer
+                        .newest();
 
                 const player =
                     ruffle.createPlayer();
@@ -256,21 +696,19 @@
                 container.appendChild(player);
 
                 await player.ruffle().load({
-                    /*
-                     * 使用完整下载后的二进制数据，
-                     * 不再让 Ruffle 自己分段请求 SWF。
-                     */
-                    data: new Uint8Array(swfData),
+                    data:
+                        new Uint8Array(
+                            swfData
+                        ),
 
-                    swfFileName: "game_v2.swf",
+                    swfFileName:
+                        "game_v2.swf",
 
-                    /*
-                     * 让游戏内部相对路径仍然以网站根目录为准。
-                     */
-                    base: new URL(
-                        "./",
-                        window.location.href
-                    ).href,
+                    base:
+                        new URL(
+                            "./",
+                            window.location.href
+                        ).href,
 
                     autoplay: "on",
                     unmuteOverlay: "visible",
@@ -278,7 +716,8 @@
                     letterbox: "on",
                     playerVersion: 12,
 
-                    deviceFontRenderer: "canvas",
+                    deviceFontRenderer:
+                        "canvas",
 
                     defaultFonts: {
                         sans: [
@@ -309,24 +748,25 @@
                     '<div id="error-message">' +
                     "游戏文件加载失败。" +
                     "<br><br>" +
-                    String(error.message || error) +
+                    String(
+                        error.message ||
+                        error
+                    ) +
                     "<br><br>" +
-                    '<button id="retry-button" ' +
-                    'style="' +
-                    "font-size:18px;" +
-                    "padding:10px 24px;" +
-                    "cursor:pointer;" +
-                    '">' +
+                    '<button id="retry-button">' +
                     "重新加载" +
                     "</button>" +
                     "</div>";
 
                 document
-                    .getElementById("retry-button")
+                    .getElementById(
+                        "retry-button"
+                    )
                     .addEventListener(
                         "click",
                         function () {
-                            window.location.reload();
+                            window.location
+                                .reload();
                         }
                     );
             }
@@ -339,7 +779,9 @@
 
         (function () {
             var hm =
-                document.createElement("script");
+                document.createElement(
+                    "script"
+                );
 
             hm.src =
                 "https://hm.baidu.com/hm.js?" +
@@ -350,7 +792,10 @@
                     "script"
                 )[0];
 
-            s.parentNode.insertBefore(hm, s);
+            s.parentNode.insertBefore(
+                hm,
+                s
+            );
         })();
     </script>
 </body>
