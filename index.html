@@ -17,14 +17,38 @@
         }
 
         #game-container {
+            position: relative;
             width: 100%;
             height: 100%;
             display: flex;
             align-items: center;
             justify-content: center;
+            background: #000;
+        }
+
+        #loading-message,
+        #error-message {
+            color: #fff;
+            font-family:
+                "Microsoft YaHei",
+                "Noto Sans CJK SC",
+                Arial,
+                sans-serif;
+            text-align: center;
+            line-height: 1.8;
+            padding: 30px;
+        }
+
+        #loading-message {
+            font-size: 20px;
+        }
+
+        #error-message {
+            font-size: 18px;
         }
 
         ruffle-player {
+            display: block;
             width: 100%;
             height: 100%;
         }
@@ -32,62 +56,258 @@
 
     <!-- 本地自托管的 Ruffle -->
     <script src="./ruffle/ruffle.js"></script>
-
 </head>
 
 <body>
-    <div id="game-container"></div>
+    <div id="game-container">
+        <div id="loading-message">
+            游戏正在加载，请稍候……<br>
+            首次加载需要下载约 36 MB 的游戏文件
+        </div>
+    </div>
 
     <script>
-        window.addEventListener("DOMContentLoaded", function () {
-            const ruffle = window.RufflePlayer.newest();
-            const player = ruffle.createPlayer();
+        window.addEventListener("DOMContentLoaded", async function () {
+            const container =
+                document.getElementById("game-container");
 
-            document
-                .getElementById("game-container")
-                .appendChild(player);
+            /*
+             * 完整下载并检查 SWF。
+             * 如果 GitHub Pages 偶尔返回异常的分段内容，
+             * 会自动换一个地址参数重新请求。
+             */
+            async function downloadSwf(maxAttempts = 3) {
+                let lastError = null;
 
-            player.ruffle().load({
-                url: "./game.swf",
-                autoplay: "on",
-                unmuteOverlay: "visible",
-                scale: "showAll",
-                letterbox: "on",
-                playerVersion: 12,
+                for (
+                    let attempt = 1;
+                    attempt <= maxAttempts;
+                    attempt++
+                ) {
+                    try {
+                        const swfUrl = new URL(
+                            "./game_v2.swf",
+                            window.location.href
+                        );
 
-                deviceFontRenderer: "canvas",
+                        /*
+                         * 修改游戏文件后，可以更改这里的版本号，
+                         * 用于绕过旧缓存。
+                         */
+                        swfUrl.searchParams.set(
+                            "v",
+                            "20260805-2"
+                        );
 
-                defaultFonts: {
-                    sans: [
-                        "Microsoft YaHei",
-                        "SimSun",
-                        "Noto Sans CJK SC",
-                        "Arial"
-                    ],
+                        /*
+                         * 第一次失败后，后续请求使用独立参数，
+                         * 防止再次命中同一个异常缓存。
+                         */
+                        if (attempt > 1) {
+                            swfUrl.searchParams.set(
+                                "retry",
+                                Date.now() + "-" + attempt
+                            );
+                        }
 
-                    serif: [
-                        "SimSun",
-                        "Microsoft YaHei"
-                    ],
+                        const response = await fetch(
+                            swfUrl,
+                            {
+                                method: "GET",
+                                cache: "no-store"
+                            }
+                        );
 
-                    typewriter: [
-                        "Microsoft YaHei",
-                        "SimSun"
-                    ]
+                        if (!response.ok) {
+                            throw new Error(
+                                "HTTP 状态码：" +
+                                response.status
+                            );
+                        }
+
+                        const data =
+                            await response.arrayBuffer();
+
+                        if (data.byteLength < 8) {
+                            throw new Error(
+                                "下载到的文件过短，仅有 " +
+                                data.byteLength +
+                                " 字节"
+                            );
+                        }
+
+                        /*
+                         * 检查是否收到了不完整的 Range 响应。
+                         */
+                        const contentRange =
+                            response.headers.get(
+                                "content-range"
+                            );
+
+                        if (contentRange) {
+                            const match = contentRange.match(
+                                /bytes\s+(\d+)-(\d+)\/(\d+)/i
+                            );
+
+                            if (match) {
+                                const start =
+                                    Number(match[1]);
+                                const total =
+                                    Number(match[3]);
+
+                                if (
+                                    start !== 0 ||
+                                    data.byteLength !== total
+                                ) {
+                                    throw new Error(
+                                        "服务器返回了不完整的分段文件：" +
+                                        contentRange
+                                    );
+                                }
+                            }
+                        }
+
+                        /*
+                         * 合法 SWF 的前三个字符应当是：
+                         * FWS、CWS 或 ZWS。
+                         */
+                        const bytes =
+                            new Uint8Array(data, 0, 3);
+
+                        const signature =
+                            String.fromCharCode(
+                                bytes[0],
+                                bytes[1],
+                                bytes[2]
+                            );
+
+                        if (
+                            signature !== "FWS" &&
+                            signature !== "CWS" &&
+                            signature !== "ZWS"
+                        ) {
+                            throw new Error(
+                                "文件头不是合法 SWF：" +
+                                JSON.stringify(signature)
+                            );
+                        }
+
+                        return data;
+                    } catch (error) {
+                        console.error(
+                            "第 " +
+                            attempt +
+                            " 次下载失败：",
+                            error
+                        );
+
+                        lastError = error;
+
+                        if (attempt < maxAttempts) {
+                            await new Promise(function (
+                                resolve
+                            ) {
+                                setTimeout(resolve, 1000);
+                            });
+                        }
+                    }
                 }
-            });
+
+                throw lastError ||
+                    new Error("SWF 下载失败");
+            }
+
+            try {
+                const swfData = await downloadSwf();
+
+                const ruffle =
+                    window.RufflePlayer.newest();
+
+                const player =
+                    ruffle.createPlayer();
+
+                container.innerHTML = "";
+                container.appendChild(player);
+
+                await player.ruffle().load({
+                    /*
+                     * 使用完整下载后的二进制数据，
+                     * 不再让 Ruffle 自己分段请求 SWF。
+                     */
+                    data: new Uint8Array(swfData),
+
+                    swfFileName: "game_v2.swf",
+
+                    /*
+                     * 让游戏内部相对路径仍然以网站根目录为准。
+                     */
+                    base: new URL(
+                        "./",
+                        window.location.href
+                    ).href,
+
+                    autoplay: "on",
+                    unmuteOverlay: "visible",
+                    scale: "showAll",
+                    letterbox: "on",
+                    playerVersion: 12,
+
+                    deviceFontRenderer: "canvas",
+
+                    defaultFonts: {
+                        sans: [
+                            "Microsoft YaHei",
+                            "SimSun",
+                            "Noto Sans CJK SC",
+                            "Arial"
+                        ],
+
+                        serif: [
+                            "SimSun",
+                            "Microsoft YaHei"
+                        ],
+
+                        typewriter: [
+                            "Microsoft YaHei",
+                            "SimSun"
+                        ]
+                    }
+                });
+            } catch (error) {
+                console.error(
+                    "游戏最终加载失败：",
+                    error
+                );
+
+                container.innerHTML =
+                    '<div id="error-message">' +
+                    "游戏文件加载失败，请刷新页面重试。" +
+                    "<br><br>" +
+                    String(error.message || error) +
+                    "</div>";
+            }
         });
     </script>
 
+    <!-- 百度统计 -->
     <script>
-    var _hmt = _hmt || [];
-    (function() {
-        var hm = document.createElement("script");
-        hm.src = "https://hm.baidu.com/hm.js?b1e1c2a42e540fa7a8962cca3ec8e1da";
-        var s = document.getElementsByTagName("script")[0];
-        s.parentNode.insertBefore(hm, s);
-    })();
-    </script>
+        var _hmt = _hmt || [];
 
+        (function () {
+            var hm =
+                document.createElement("script");
+
+            hm.src =
+                "https://hm.baidu.com/hm.js?" +
+                "b1e1c2a42e540fa7a8962cca3ec8e1da";
+
+            var s =
+                document.getElementsByTagName(
+                    "script"
+                )[0];
+
+            s.parentNode.insertBefore(hm, s);
+        })();
+    </script>
 </body>
 </html>
